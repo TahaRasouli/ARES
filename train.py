@@ -9,16 +9,18 @@ def main():
     )
 
     datamodule = EclipseDataModule(
-        csv_path="ECLIPSE_train.csv",
+        train_csv_path="ECLIPSE_train.csv",
+        val_csv_path="ECLIPSE_test.csv",
         tokenizer=tokenizer,
-        batch_size=4,   # per-GPU batch size
+        batch_size=4,
         max_len=512
     )
+
 
     model = EclipseLightningModule(lr=2e-5)
 
     trainer = pl.Trainer(
-        max_epochs=5,
+        max_epochs=10,
         accelerator="gpu",
         devices=2,                  # 👈 TWO GPUs
         strategy="ddp",              # 👈 Distributed Data Parallel
