@@ -11,13 +11,12 @@ class AttentionPooling(nn.Module):
         )
 
     def forward(self, hidden_states, attention_mask):
-        """
-        hidden_states: [B, T, H]
-        attention_mask: [B, T]
-        """
         scores = self.attn(hidden_states).squeeze(-1)  # [B, T]
-        scores = scores.masked_fill(attention_mask == 0, -1e9)
+
+        # Use dtype-safe minimum (works in fp16/bf16/fp32)
+        min_val = torch.finfo(scores.dtype).min
+        scores = scores.masked_fill(attention_mask == 0, min_val)
+
         weights = torch.softmax(scores, dim=1)
         pooled = torch.sum(hidden_states * weights.unsqueeze(-1), dim=1)
-        return pooled  # [B, H]
-
+        return pooled
