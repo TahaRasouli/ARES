@@ -4,16 +4,10 @@ from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
 from text_utils import normalize_paragraphs
 
-IELTS_KEYS = ["TA", "TR", "CC", "LR", "GA"]
+TASK2_KEYS = ["TA", "CC", "LR", "GA"]
 
 
-class IELTSStageDataset(Dataset):
-    """
-    Mixed Task1 + Task2 dataset:
-      - Task 1 uses: TR, CC, LR, GA
-      - Task 2 uses: TA, CC, LR, GA
-    Missing labels are simply absent (masked loss).
-    """
+class Task2Dataset(Dataset):
     def __init__(self, records: List[Dict[str, Any]], tokenizer: PreTrainedTokenizerBase, max_length: int = 512):
         self.records = records
         self.tokenizer = tokenizer
@@ -22,10 +16,15 @@ class IELTSStageDataset(Dataset):
     def __len__(self):
         return len(self.records)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
         r = self.records[idx]
-        prompt = normalize_paragraphs(r.get("prompt", ""))
-        essay = normalize_paragraphs(r.get("essay", ""))
+
+        prompt = r.get("prompt", "")
+        if not prompt and "Topic" in r:
+            prompt = r["Topic"]
+        prompt = normalize_paragraphs(str(prompt))
+
+        essay = normalize_paragraphs(str(r.get("essay", "")))
 
         text = f"PROMPT:\n{prompt}\n\nESSAY:\n{essay}"
 
@@ -37,8 +36,8 @@ class IELTSStageDataset(Dataset):
             return_tensors="pt",
         )
 
-        labels = {}
-        for k in IELTS_KEYS:
+        labels: Dict[str, torch.Tensor] = {}
+        for k in TASK2_KEYS:
             v = r.get(k, None)
             if v is None:
                 continue

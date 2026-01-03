@@ -4,10 +4,10 @@ import torch.nn as nn
 from transformers import AutoModel
 from pooling import AttentionPooling
 
-IELTS_KEYS = ["TA", "TR", "CC", "LR", "GA"]
+TASK2_KEYS = ["TA", "CC", "LR", "GA"]
 
 
-class IELTSScorer(nn.Module):
+class Task2Scorer(nn.Module):
     def __init__(self, model_name: str):
         super().__init__()
         self.encoder = AutoModel.from_pretrained(model_name)
@@ -17,7 +17,7 @@ class IELTSScorer(nn.Module):
         self.proj = nn.Linear(hidden, 512)
         self.act = nn.GELU()
 
-        self.heads = nn.ModuleDict({k: nn.Linear(512, 1) for k in IELTS_KEYS})
+        self.heads = nn.ModuleDict({k: nn.Linear(512, 1) for k in TASK2_KEYS})
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> Dict[str, torch.Tensor]:
         out = self.encoder(input_ids=input_ids, attention_mask=attention_mask)

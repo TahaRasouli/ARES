@@ -2,9 +2,9 @@ from typing import Dict, Any, List
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-
 from transformers.optimization import get_linear_schedule_with_warmup
-from ielts_model import IELTSScorer, IELTS_KEYS
+
+from task2_model import Task2Scorer, TASK2_KEYS
 
 
 def build_loss(name: str) -> nn.Module:
@@ -18,31 +18,34 @@ def build_loss(name: str) -> nn.Module:
     raise ValueError("loss must be one of: mse, mae, huber")
 
 
-def load_stage1a_weights_into_ielts(model: nn.Module, stage1a_ckpt_path: str):
+def load_init_from_ckpt(model: nn.Module, ckpt_path: str):
     """
-    Loads ONLY the shared backbone weights from Stage 1A into the IELTS model:
-      - net.encoder.*
-      - net.pool.*
-      - net.proj.*
-      - net.act.* (no params but harmless)
-    Ignores Stage 1A heads (ECLIPSE heads do not match).
+    Loads:
+      - net.encoder.*, net.pool.*, net.proj.*
+      - net.heads.TA/CC/LR/GA.* (if present)
+    from a Lightning checkpoint that used 'net.' as the root module.
+    Ignores any non-matching heads (e.g., TR).
     """
-    ckpt = torch.load(stage1a_ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu")
     sd = ckpt["state_dict"] if "state_dict" in ckpt else ckpt
 
-    # Stage 1A keys look like: net.encoder..., net.pool..., net.proj...
-    wanted_prefixes = ("net.encoder.", "net.pool.", "net.proj.", "net.act.")
-    filtered = {k: v for k, v in sd.items() if k.startswith(wanted_prefixes)}
+    allowed_prefixes = ("net.encoder.", "net.pool.", "net.proj.")
+    allowed_heads = tuple(f"net.heads.{k}." for k in TASK2_KEYS)
+
+    filtered = {}
+    for k, v in sd.items():
+        if k.startswith(allowed_prefixes) or k.startswith(allowed_heads):
+            filtered[k] = v
 
     missing, unexpected = model.load_state_dict(filtered, strict=False)
     return missing, unexpected
 
 
-class IELTSLightning(pl.LightningModule):
+class Task2Lightning(pl.LightningModule):
     def __init__(
         self,
         model_name: str,
-        stage1a_ckpt: str,
+        init_ckpt: str,
         lr: float = 1e-5,
         weight_decay: float = 0.01,
         loss_name: str = "mse",
@@ -51,22 +54,21 @@ class IELTSLightning(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        self.net = IELTSScorer(model_name=model_name)
+        self.net = Task2Scorer(model_name=model_name)
         self.crit = build_loss(loss_name)
 
-        # load Stage1A backbone weights
-        missing, unexpected = load_stage1a_weights_into_ielts(self.net, stage1a_ckpt)
-        # You can log these once if desired:
-        # self.print("Loaded Stage1A. Missing:", missing[:5], "Unexpected:", unexpected[:5])
+        missing, unexpected = load_init_from_ckpt(self.net, init_ckpt)
+        # If you want to verify once:
+        # self.print("Init loaded. Missing:", len(missing), "Unexpected:", len(unexpected))
 
         self._train_losses = []
         self._val_losses = []
 
-    def _masked_loss(self, preds: Dict[str, torch.Tensor], labels_list: List[Dict[str, torch.Tensor]]):
+    def _masked_loss(self, preds: Dict[str, torch.Tensor], labels_list: List[Dict[str, torch.Tensor]]) -> torch.Tensor:
         losses = []
         for i, lab in enumerate(labels_list):
             for k, y in lab.items():
-                if k not in IELTS_KEYS:
+                if k not in TASK2_KEYS:
                     continue
                 losses.append(self.crit(preds[k][i], y.to(preds[k].device)))
         if not losses:
@@ -76,15 +78,13 @@ class IELTSLightning(pl.LightningModule):
     def training_step(self, batch: Dict[str, Any], batch_idx: int):
         preds = self.net(batch["input_ids"], batch["attention_mask"])
         loss = self._masked_loss(preds, batch["labels_list"])
-
         self._train_losses.append(loss.detach())
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch: Dict[str, Any], batch_idx: int):
         preds = self.net(batch["input_ids"], batch["attention_mask"])
         loss = self._masked_loss(preds, batch["labels_list"])
-
         self._val_losses.append(loss.detach())
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
@@ -102,11 +102,7 @@ class IELTSLightning(pl.LightningModule):
         self._val_losses.clear()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.hparams.lr,
-            weight_decay=self.hparams.weight_decay,
-        )
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.weight_decay)
 
         total_steps = int(self.trainer.estimated_stepping_batches)
         warmup_steps = int(total_steps * self.hparams.warmup_ratio)

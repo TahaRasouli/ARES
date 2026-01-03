@@ -1,43 +1,59 @@
 import argparse
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 
-from eclipse_datamodule import EclipseDataModule
-from eclipse_lit_module import EclipseLightning
+from task2_datamodule import Task2DataModule
+from task2_lit_module import Task2Lightning
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--train_csv", required=True)
-    ap.add_argument("--val_csv", required=True)
-    ap.add_argument("--model_name", default="microsoft/deberta-v3-base")
+    ap.add_argument("--task2_path", type=str, required=True)
+    ap.add_argument("--init_ckpt", type=str, required=True)
+
+    ap.add_argument("--model_name", type=str, default="microsoft/deberta-v3-base")
     ap.add_argument("--batch_size", type=int, default=4)
     ap.add_argument("--max_length", type=int, default=512)
-    ap.add_argument("--epochs", type=int, default=8)
-    ap.add_argument("--lr", type=float, default=2e-5)
-    ap.add_argument("--precision", default="16-mixed")
+    ap.add_argument("--epochs", type=int, default=10)
+
+    ap.add_argument("--lr", type=float, default=1e-5)
+    ap.add_argument("--weight_decay", type=float, default=0.01)
+    ap.add_argument("--loss", type=str, default="mse", choices=["mse", "mae", "huber"])
+    ap.add_argument("--warmup_ratio", type=float, default=0.06)
+
+    ap.add_argument("--precision", type=str, default="16-mixed")
+    ap.add_argument("--num_workers", type=int, default=4)
+    ap.add_argument("--val_ratio", type=float, default=0.15)
+    ap.add_argument("--seed", type=int, default=42)
 
     args = ap.parse_args()
 
-    dm = EclipseDataModule(
-        train_csv=args.train_csv,
-        val_csv=args.val_csv,
+    dm = Task2DataModule(
+        task2_path=args.task2_path,
         model_name=args.model_name,
         batch_size=args.batch_size,
         max_length=args.max_length,
+        num_workers=args.num_workers,
+        val_ratio=args.val_ratio,
+        seed=args.seed,
     )
 
-    model = EclipseLightning(
+    model = Task2Lightning(
         model_name=args.model_name,
+        init_ckpt=args.init_ckpt,
         lr=args.lr,
+        weight_decay=args.weight_decay,
+        loss_name=args.loss,
+        warmup_ratio=args.warmup_ratio,
     )
 
     ckpt = ModelCheckpoint(
         monitor="val_loss",
         mode="min",
-        filename="stage1a-eclipse-{epoch:02d}-{val_loss:.4f}",
         save_top_k=1,
+        filename="task2-stage2-{epoch:02d}-{val_loss:.4f}",
     )
+    lrmon = LearningRateMonitor(logging_interval="step")
 
     trainer = pl.Trainer(
         accelerator="gpu",
@@ -45,9 +61,13 @@ def main():
         strategy="ddp",
         max_epochs=args.epochs,
         precision=args.precision,
-        callbacks=[ckpt],
-        enable_progress_bar=False,  # ensures prints persist
+        callbacks=[ckpt, lrmon],
+        log_every_n_steps=20,
+        enable_progress_bar=True,     # ✅ keep progress bar
+        enable_model_summary=False,   # optional, cleaner output
+        num_sanity_val_steps=0,       # avoids extra val print
     )
+
 
     trainer.fit(model, datamodule=dm)
 
