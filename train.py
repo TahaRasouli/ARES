@@ -61,12 +61,13 @@ def main():
     trainer = pl.Trainer(
         accelerator="gpu",
         devices=2,
-        strategy="ddp",
+        strategy="ddp_find_unused_parameters_true",
         max_epochs=args.epochs,
         precision=args.precision,
         callbacks=[ckpt, lrmon],
         log_every_n_steps=20,
     )
+
 
     trainer.fit(model, datamodule=dm)
 
