@@ -1,22 +1,24 @@
 import torch
 import torch.nn as nn
 
+
 class AttentionPooling(nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, hidden_size: int, attn_hidden: int = 256):
         super().__init__()
-        self.attn = nn.Sequential(
-            nn.Linear(hidden_size, 128),
+        self.scorer = nn.Sequential(
+            nn.Linear(hidden_size, attn_hidden),
             nn.Tanh(),
-            nn.Linear(128, 1)
+            nn.Linear(attn_hidden, 1),
         )
 
-    def forward(self, hidden_states, attention_mask):
-        scores = self.attn(hidden_states).squeeze(-1)  # [B, T]
+    def forward(self, token_embeddings: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        # token_embeddings: [B, T, H]
+        # attention_mask: [B, T] (1 = keep, 0 = pad)
+        scores = self.scorer(token_embeddings).squeeze(-1)  # [B, T]
 
-        # Use dtype-safe minimum (works in fp16/bf16/fp32)
-        min_val = torch.finfo(scores.dtype).min
-        scores = scores.masked_fill(attention_mask == 0, min_val)
+        # Mask in fp32 to avoid fp16 overflow issues
+        scores = scores.float().masked_fill(attention_mask == 0, torch.finfo(torch.float32).min)
+        weights = torch.softmax(scores, dim=-1).to(token_embeddings.dtype)  # [B, T]
 
-        weights = torch.softmax(scores, dim=1)
-        pooled = torch.sum(hidden_states * weights.unsqueeze(-1), dim=1)
+        pooled = torch.sum(token_embeddings * weights.unsqueeze(-1), dim=1)  # [B, H]
         return pooled
