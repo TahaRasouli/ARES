@@ -50,6 +50,16 @@ def split_train_val(records: List[Dict[str, Any]], val_ratio: float = 0.15, seed
     val = [records[i] for i in range(len(records)) if i in val_set]
     return train, val
 
+def _clean_band(x):
+    if x is None:
+        return None
+    v = float(x)
+    if v < 0 or v > 9:
+        return None
+    return v
+
+def has_all_four(r):
+    return all(r.get(k) is not None for k in ["TA", "CC", "LR", "GA"])
 
 class Task2DataModule(pl.LightningDataModule):
     def __init__(
@@ -93,9 +103,11 @@ class Task2DataModule(pl.LightningDataModule):
         train_records, val_records = split_train_val(norm, self.val_ratio, self.seed)
         self.train_ds = Task2Dataset(train_records, self.tokenizer, self.max_length)
         self.val_ds = Task2Dataset(val_records, self.tokenizer, self.max_length)
+        records = [r for r in records if has_all_four(r)]
+
 
         # Optional debug
-        # print("Task2 Train:", len(self.train_ds), "Task2 Val:", len(self.val_ds))
+        print("Task2 Train:", len(self.train_ds), "Task2 Val:", len(self.val_ds))
 
     def train_dataloader(self):
         return DataLoader(
