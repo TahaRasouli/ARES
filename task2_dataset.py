@@ -23,10 +23,7 @@ class Task2Dataset(Dataset):
 
     def __getitem__(self, idx):
         r = self.records[idx]
-        prompt = r.get("prompt", "")
-        essay = r.get("essay", "")
-
-        text = self._build_text(prompt, essay)
+        text = self._build_text(r.get("prompt", ""), r.get("essay", ""))
 
         enc = self.tokenizer(
             text,
@@ -36,7 +33,8 @@ class Task2Dataset(Dataset):
             return_tensors="pt",
         )
 
-        labels = {k: torch.tensor(float(r[k]), dtype=torch.float32) for k in TASK2_KEYS if r.get(k) is not None}
+        # normalize labels to [0,1]
+        labels = {k: torch.tensor(float(r[k]) / 9.0, dtype=torch.float32) for k in TASK2_KEYS if r.get(k) is not None}
 
         return {
             "input_ids": enc["input_ids"].squeeze(0),

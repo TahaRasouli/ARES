@@ -20,11 +20,6 @@ def build_loss(name: str) -> nn.Module:
 
 
 def load_init_from_ckpt(model: nn.Module, ckpt_path: str) -> Tuple[int, int]:
-    """
-    Load only what is useful from a Lightning checkpoint:
-      - net.encoder.*, net.pool.*, net.proj.*
-      - net.heads.TA/CC/LR/GA.* if present
-    """
     ckpt = torch.load(ckpt_path, map_location="cpu")
     sd = ckpt["state_dict"] if "state_dict" in ckpt else ckpt
 
@@ -40,15 +35,31 @@ def load_init_from_ckpt(model: nn.Module, ckpt_path: str) -> Tuple[int, int]:
     return len(missing), len(unexpected)
 
 
+def iter_encoder_layers(hf_model):
+    """
+    DeBERTa-v3 (DebertaV2Model) exposes encoder layers at:
+      model.encoder.layer
+    """
+    enc = getattr(hf_model, "encoder", None)
+    if enc is None:
+        return []
+    layers = getattr(enc, "layer", None)
+    if layers is None:
+        return []
+    return list(layers)
+
+
 class Task2Lightning(pl.LightningModule):
     def __init__(
         self,
         model_name: str,
         init_ckpt: str,
-        lr: float = 1e-5,
+        lr_encoder: float = 1e-5,
+        lr_head: float = 5e-5,
         weight_decay: float = 0.01,
-        loss_name: str = "mse",
+        loss_name: str = "huber",
         warmup_ratio: float = 0.06,
+        layerwise_decay: float = 0.95,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -63,8 +74,10 @@ class Task2Lightning(pl.LightningModule):
         self._train_losses = []
         self._val_losses = []
 
+        # accumulate per-criterion sums for RMSE
+        self._val_se = {k: [] for k in TASK2_KEYS}  # squared errors
+
     def on_fit_start(self):
-        # print once (rank 0)
         if self.trainer.is_global_zero:
             self.print(f"Init checkpoint loaded. missing_keys={self._init_missing} unexpected_keys={self._init_unexpected}")
 
@@ -82,7 +95,6 @@ class Task2Lightning(pl.LightningModule):
         preds = self.net(batch["input_ids"], batch["attention_mask"])
         loss = self._masked_loss(preds, batch["labels_list"])
         self._train_losses.append(loss.detach())
-
         self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         return loss
 
@@ -90,13 +102,26 @@ class Task2Lightning(pl.LightningModule):
         preds = self.net(batch["input_ids"], batch["attention_mask"])
         loss = self._masked_loss(preds, batch["labels_list"])
         self._val_losses.append(loss.detach())
-
         self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+
+        # compute per-criterion squared error on ORIGINAL band scale:
+        # labels and preds are in [0,1] => convert to [0,9] by *9
+        for i, lab in enumerate(batch["labels_list"]):
+            for k, y in lab.items():
+                if k not in TASK2_KEYS:
+                    continue
+                yb = y.to(preds[k].device) * 9.0
+                pb = preds[k][i] * 9.0
+                se = (pb - yb) ** 2
+                self._val_se[k].append(se.detach())
+
         return loss
 
     def on_train_epoch_end(self):
         if self.trainer.is_global_zero and self._train_losses:
             avg = torch.stack(self._train_losses).mean().item()
+            # convert train loss back to band-scale RMSE approx for intuition:
+            # if loss is MSE on normalized scale, RMSE_band ~ sqrt(loss)*9
             self.print(f"\nEpoch {self.current_epoch} | Train loss: {avg:.4f}")
         self._train_losses.clear()
 
@@ -104,14 +129,67 @@ class Task2Lightning(pl.LightningModule):
         if self.trainer.is_global_zero and self._val_losses:
             avg = torch.stack(self._val_losses).mean().item()
             self.print(f"Epoch {self.current_epoch} | Val   loss: {avg:.4f}")
+
+            # per-criterion RMSE (band scale)
+            rmse_parts = []
+            for k in TASK2_KEYS:
+                if self._val_se[k]:
+                    mse_k = torch.stack(self._val_se[k]).mean().item()
+                    rmse_k = mse_k ** 0.5
+                    rmse_parts.append(f"{k}={rmse_k:.3f}")
+                self._val_se[k].clear()
+
+            if rmse_parts:
+                self.print(f"Epoch {self.current_epoch} | Val RMSE (bands): " + " | ".join(rmse_parts))
+
         self._val_losses.clear()
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.weight_decay)
+        # ---- Discriminative LR + layer-wise decay for encoder ----
+        encoder = self.net.encoder
+
+        # Identify encoder layers (top to bottom)
+        layers = iter_encoder_layers(encoder)
+        n_layers = len(layers)
+
+        param_groups = []
+
+        # Head/pool/proj get higher LR
+        head_params = list(self.net.pool.parameters()) + list(self.net.proj.parameters()) + list(self.net.heads.parameters())
+        param_groups.append({"params": head_params, "lr": self.hparams.lr_head, "weight_decay": self.hparams.weight_decay})
+
+        # Encoder embedding + lower components
+        # Start with base lr for bottom, increase slightly toward top
+        base_lr = self.hparams.lr_encoder
+        decay = self.hparams.layerwise_decay
+
+        # Add embeddings + everything not in layer blocks separately
+        # (This is a simple catch-all: parameters not included later will be added here)
+        handled = set()
+        for p in head_params:
+            handled.add(id(p))
+
+        # Layer blocks
+        for idx, layer in enumerate(layers):
+            # idx=0 is bottom, idx=n_layers-1 is top
+            layer_lr = base_lr * (decay ** (n_layers - 1 - idx))
+            params = [p for p in layer.parameters() if p.requires_grad]
+            for p in params:
+                handled.add(id(p))
+            param_groups.append({"params": params, "lr": layer_lr, "weight_decay": self.hparams.weight_decay})
+
+        # Remaining encoder params (embeddings, norms, etc.)
+        rest = []
+        for p in encoder.parameters():
+            if p.requires_grad and id(p) not in handled:
+                rest.append(p)
+        if rest:
+            param_groups.append({"params": rest, "lr": base_lr, "weight_decay": self.hparams.weight_decay})
+
+        optimizer = torch.optim.AdamW(param_groups)
 
         total_steps = int(self.trainer.estimated_stepping_batches)
         warmup_steps = int(total_steps * self.hparams.warmup_ratio)
-
         scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
         return {

@@ -3,8 +3,10 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple
 import random
 
-
 TASK2_KEYS = ["TA", "CC", "LR", "GA"]
+
+# IELTS Task 2 bands are usually in 0.5 increments (optional constraint)
+VALID_HALF_BANDS = {x / 2 for x in range(0, 19)}  # 0.0 ... 9.0
 
 
 def load_task2(path: str) -> List[Dict[str, Any]]:
@@ -24,12 +26,11 @@ def load_task2(path: str) -> List[Dict[str, Any]]:
     if p.suffix == ".json":
         with p.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        # allow either a list or a single dict
         if isinstance(data, dict):
             return [data]
         if isinstance(data, list):
             return data
-        raise ValueError("JSON must be a list[dict] or a dict")
+        raise ValueError("JSON must be list[dict] or dict")
 
     raise ValueError("Unsupported format. Use .json or .jsonl")
 
@@ -37,7 +38,6 @@ def load_task2(path: str) -> List[Dict[str, Any]]:
 def normalize_task2_record(r: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(r)
 
-    # prompt normalization
     if "prompt" not in out:
         if "Topic" in out:
             out["prompt"] = out["Topic"]
@@ -46,7 +46,6 @@ def normalize_task2_record(r: Dict[str, Any]) -> Dict[str, Any]:
         else:
             out["prompt"] = ""
 
-    # essay normalization
     if "essay" not in out:
         if "content" in out:
             out["essay"] = out["content"]
@@ -55,11 +54,13 @@ def normalize_task2_record(r: Dict[str, Any]) -> Dict[str, Any]:
         else:
             out["essay"] = ""
 
+    # make sure strings
+    out["prompt"] = "" if out["prompt"] is None else str(out["prompt"])
+    out["essay"] = "" if out["essay"] is None else str(out["essay"])
     return out
 
 
 def _clean_band(x):
-    """IELTS bands must be in [0, 9]. Return None if invalid."""
     if x is None:
         return None
     try:
@@ -71,24 +72,39 @@ def _clean_band(x):
     return v
 
 
-def clean_and_filter_task2(records: List[Dict[str, Any]], require_all_four: bool = True) -> List[Dict[str, Any]]:
+def clean_and_filter_task2(
+    records: List[Dict[str, Any]],
+    require_all_four: bool = True,
+    enforce_half_bands: bool = False,
+    max_gap: float = 4.0,
+) -> List[Dict[str, Any]]:
+    """
+    enforce_half_bands: drop samples whose labels are not multiples of 0.5
+    max_gap: drop samples with extreme inconsistency across criteria (noise heuristic)
+    """
     cleaned = []
     for r in records:
         r = normalize_task2_record(r)
 
-        # clean labels
         for k in TASK2_KEYS:
             r[k] = _clean_band(r.get(k, None))
 
-        if require_all_four:
-            if not all(r.get(k) is not None for k in TASK2_KEYS):
+        if require_all_four and not all(r.get(k) is not None for k in TASK2_KEYS):
+            continue
+
+        if enforce_half_bands:
+            ok = True
+            for k in TASK2_KEYS:
+                if r[k] not in VALID_HALF_BANDS:
+                    ok = False
+                    break
+            if not ok:
                 continue
 
-        # keep only valid prompt/essay
-        if not isinstance(r.get("prompt", ""), str):
-            r["prompt"] = str(r.get("prompt", ""))
-        if not isinstance(r.get("essay", ""), str):
-            r["essay"] = str(r.get("essay", ""))
+        # simple noise filter: drop extreme inconsistencies
+        vals = [r[k] for k in TASK2_KEYS]
+        if max(vals) - min(vals) > max_gap:
+            continue
 
         cleaned.append(r)
 
@@ -106,20 +122,3 @@ def split_train_val(records: List[Dict[str, Any]], val_ratio: float = 0.15, seed
     train = [records[i] for i in range(len(records)) if i not in val_set]
     val = [records[i] for i in range(len(records)) if i in val_set]
     return train, val
-
-
-def debug_label_ranges(records: List[Dict[str, Any]], n: int = 2000) -> None:
-    """Optional diagnostic utility."""
-    from collections import defaultdict
-    vals = defaultdict(list)
-    for r in records[:n]:
-        for k in TASK2_KEYS:
-            if r.get(k) is not None:
-                vals[k].append(float(r[k]))
-    print("\n[DEBUG] Task2 label ranges:")
-    for k in TASK2_KEYS:
-        v = vals.get(k, [])
-        if v:
-            print(f"  {k}: min={min(v):.2f}, max={max(v):.2f}, mean={sum(v)/len(v):.2f}, n={len(v)}")
-        else:
-            print(f"  {k}: no valid labels found")
