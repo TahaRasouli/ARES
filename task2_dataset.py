@@ -2,9 +2,9 @@ from typing import Dict, Any, List
 import torch
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase
-from text_utils import normalize_paragraphs
 
-TASK2_KEYS = ["TA", "CC", "LR", "GA"]
+from text_utils import normalize_paragraphs
+from task2_data import TASK2_KEYS
 
 
 class Task2Dataset(Dataset):
@@ -16,17 +16,17 @@ class Task2Dataset(Dataset):
     def __len__(self):
         return len(self.records)
 
-    def __getitem__(self, idx: int) -> Dict[str, Any]:
+    def _build_text(self, prompt: str, essay: str) -> str:
+        prompt = normalize_paragraphs(prompt)
+        essay = normalize_paragraphs(essay)
+        return f"PROMPT:\n{prompt}\n\nESSAY:\n{essay}"
+
+    def __getitem__(self, idx):
         r = self.records[idx]
-
         prompt = r.get("prompt", "")
-        if not prompt and "Topic" in r:
-            prompt = r["Topic"]
-        prompt = normalize_paragraphs(str(prompt))
+        essay = r.get("essay", "")
 
-        essay = normalize_paragraphs(str(r.get("essay", "")))
-
-        text = f"PROMPT:\n{prompt}\n\nESSAY:\n{essay}"
+        text = self._build_text(prompt, essay)
 
         enc = self.tokenizer(
             text,
@@ -36,12 +36,7 @@ class Task2Dataset(Dataset):
             return_tensors="pt",
         )
 
-        labels: Dict[str, torch.Tensor] = {}
-        for k in TASK2_KEYS:
-            v = r.get(k, None)
-            if v is None:
-                continue
-            labels[k] = torch.tensor(float(v), dtype=torch.float32)
+        labels = {k: torch.tensor(float(r[k]), dtype=torch.float32) for k in TASK2_KEYS if r.get(k) is not None}
 
         return {
             "input_ids": enc["input_ids"].squeeze(0),
@@ -51,8 +46,7 @@ class Task2Dataset(Dataset):
 
 
 def collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
-    return {
-        "input_ids": torch.stack([b["input_ids"] for b in batch], dim=0),
-        "attention_mask": torch.stack([b["attention_mask"] for b in batch], dim=0),
-        "labels_list": [b["labels"] for b in batch],
-    }
+    input_ids = torch.stack([b["input_ids"] for b in batch], dim=0)
+    attention_mask = torch.stack([b["attention_mask"] for b in batch], dim=0)
+    labels_list = [b["labels"] for b in batch]
+    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels_list": labels_list}

@@ -25,6 +25,7 @@ def main():
     ap.add_argument("--num_workers", type=int, default=4)
     ap.add_argument("--val_ratio", type=float, default=0.15)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--require_all_four", action="store_true")
 
     args = ap.parse_args()
 
@@ -36,6 +37,7 @@ def main():
         num_workers=args.num_workers,
         val_ratio=args.val_ratio,
         seed=args.seed,
+        require_all_four=True if args.require_all_four else True,  # default True
     )
 
     model = Task2Lightning(
@@ -62,12 +64,11 @@ def main():
         max_epochs=args.epochs,
         precision=args.precision,
         callbacks=[ckpt, lrmon],
-        log_every_n_steps=20,
-        enable_progress_bar=True,     # ✅ keep progress bar
-        enable_model_summary=False,   # optional, cleaner output
-        num_sanity_val_steps=0,       # avoids extra val print
+        log_every_n_steps=50,
+        enable_progress_bar=False,     # IMPORTANT: keep epoch prints from disappearing
+        enable_model_summary=False,
+        num_sanity_val_steps=0,
     )
-
 
     trainer.fit(model, datamodule=dm)
 

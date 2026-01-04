@@ -1,10 +1,11 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from transformers.optimization import get_linear_schedule_with_warmup
 
-from task2_model import Task2Scorer, TASK2_KEYS
+from task2_model import Task2Scorer
+from task2_data import TASK2_KEYS
 
 
 def build_loss(name: str) -> nn.Module:
@@ -18,13 +19,11 @@ def build_loss(name: str) -> nn.Module:
     raise ValueError("loss must be one of: mse, mae, huber")
 
 
-def load_init_from_ckpt(model: nn.Module, ckpt_path: str):
+def load_init_from_ckpt(model: nn.Module, ckpt_path: str) -> Tuple[int, int]:
     """
-    Loads:
+    Load only what is useful from a Lightning checkpoint:
       - net.encoder.*, net.pool.*, net.proj.*
-      - net.heads.TA/CC/LR/GA.* (if present)
-    from a Lightning checkpoint that used 'net.' as the root module.
-    Ignores any non-matching heads (e.g., TR).
+      - net.heads.TA/CC/LR/GA.* if present
     """
     ckpt = torch.load(ckpt_path, map_location="cpu")
     sd = ckpt["state_dict"] if "state_dict" in ckpt else ckpt
@@ -38,7 +37,7 @@ def load_init_from_ckpt(model: nn.Module, ckpt_path: str):
             filtered[k] = v
 
     missing, unexpected = model.load_state_dict(filtered, strict=False)
-    return missing, unexpected
+    return len(missing), len(unexpected)
 
 
 class Task2Lightning(pl.LightningModule):
@@ -57,20 +56,24 @@ class Task2Lightning(pl.LightningModule):
         self.net = Task2Scorer(model_name=model_name)
         self.crit = build_loss(loss_name)
 
-        missing, unexpected = load_init_from_ckpt(self.net, init_ckpt)
-        # If you want to verify once:
-        # self.print("Init loaded. Missing:", len(missing), "Unexpected:", len(unexpected))
+        miss, unexp = load_init_from_ckpt(self.net, init_ckpt)
+        self._init_missing = miss
+        self._init_unexpected = unexp
 
         self._train_losses = []
         self._val_losses = []
+
+    def on_fit_start(self):
+        # print once (rank 0)
+        if self.trainer.is_global_zero:
+            self.print(f"Init checkpoint loaded. missing_keys={self._init_missing} unexpected_keys={self._init_unexpected}")
 
     def _masked_loss(self, preds: Dict[str, torch.Tensor], labels_list: List[Dict[str, torch.Tensor]]) -> torch.Tensor:
         losses = []
         for i, lab in enumerate(labels_list):
             for k, y in lab.items():
-                if k not in TASK2_KEYS:
-                    continue
-                losses.append(self.crit(preds[k][i], y.to(preds[k].device)))
+                if k in TASK2_KEYS:
+                    losses.append(self.crit(preds[k][i], y.to(preds[k].device)))
         if not losses:
             return torch.tensor(0.0, device=self.device, requires_grad=True)
         return torch.stack(losses).mean()
@@ -79,14 +82,16 @@ class Task2Lightning(pl.LightningModule):
         preds = self.net(batch["input_ids"], batch["attention_mask"])
         loss = self._masked_loss(preds, batch["labels_list"])
         self._train_losses.append(loss.detach())
-        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+        self.log("train_loss", loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         return loss
 
     def validation_step(self, batch: Dict[str, Any], batch_idx: int):
         preds = self.net(batch["input_ids"], batch["attention_mask"])
         loss = self._masked_loss(preds, batch["labels_list"])
         self._val_losses.append(loss.detach())
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+
+        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         return loss
 
     def on_train_epoch_end(self):
