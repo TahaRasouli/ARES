@@ -29,10 +29,12 @@ class IELTSLitModule(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         outputs = self.model(batch['input_ids'], batch['attention_mask'], batch['extra_features'])
         
-        # Log integer-rounded accuracy
-        pred_ga = logits_to_score(outputs['GA'])
+        # DO NOT DO THIS: mae = torch.abs(outputs['GA'] - batch['labels']['GA'])
+        # DO THIS:
+        pred_ga = logits_to_score(outputs['GA']) # Converts thresholds to 1-9
         mae = torch.abs(pred_ga - batch['labels']['GA']).float().mean()
-        self.log("val_ga_mae", mae, prog_bar=True)
+        
+        self.log("val_ga_mae", mae, prog_bar=True, sync_dist=True)
 
     def configure_optimizers(self):
         # Suggestion: Discriminative Learning Rates

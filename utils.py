@@ -15,10 +15,9 @@ def extract_ga_refined_features(text):
     
     # 2. Accuracy Proxy: Readability Index
     # Lower readability often correlates with awkward grammar/syntax
-    ari = automated_readability_index(text) / 20.0 
-    
-    # 3. Density: average words per sentence
-    avg_sent_len = (word_count / max(1, sents)) / 40.0
+    ari = automated_readability_index(text) / 20.0  # Keep this normalized!
+    avg_sent_len = (word_count / max(1, sents)) / 50.0 # Standardize scale
+    return torch.tensor([complexity_ratio, ari, avg_sent_len, 1.0], dtype=torch.float)
     
     return torch.tensor([complexity_ratio, ari, avg_sent_len, 1.0], dtype=torch.float)
 
