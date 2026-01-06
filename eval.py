@@ -38,13 +38,18 @@ def run_evaluation(checkpoint_path):
             # Forward pass
             logits_dict = lit_model.model(input_ids, mask, extra)
             
+            # Inside run_evaluation function
             for k in Config.CRITERIA:
-                probas = torch.sigmoid(logits_dict[k])
-                preds = (probas > 0.5).sum(dim=1) + 1
+                # Ensure they are numpy arrays of the same integer type
+                y_true = np.array(targets[k], dtype=np.int32)
+                y_pred = np.array(results[k], dtype=np.int32)
                 
-                # Move back to CPU for numpy/metrics processing
-                results[k].extend(preds.cpu().numpy())
-                targets[k].extend(batch['labels'][k].numpy()) # Labels are already on CPU
+                qwk = cohen_kappa_score(y_true, y_pred, weights='quadratic', labels=np.arange(1, 10))
+                mae = mean_absolute_error(y_true, y_pred)
+                
+                # DEBUG: Print max/min to see if GA labels or preds are out of range [1-9]
+                if k == "GA":
+                    print(f"DEBUG GA: Pred Range [{y_pred.min()}, {y_pred.max()}] | Target Range [{y_true.min()}, {y_true.max()}]")
 
     # 3. Calculate and Print Metrics
     summary = []
