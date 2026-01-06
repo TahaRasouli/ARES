@@ -7,6 +7,9 @@ from model import IELTSScorerModel
 from train import IELTSLitModule
 from datamodule import IELTSDataModule
 from config import Config
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
 
 def run_evaluation(checkpoint_path):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -85,7 +88,24 @@ def run_evaluation(checkpoint_path):
     avg_qwk = df["QWK (Alignment)"].mean()
     print(f"Mean Quadratic Weighted Kappa: {avg_qwk:.4f}")
 
+def plot_confusion_matrices(targets, results):
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    axes = axes.flatten()
+    
+    for i, k in enumerate(Config.CRITERIA):
+        cm = confusion_matrix(targets[k], results[k], labels=np.arange(1, 10))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[i],
+                    xticklabels=np.arange(1, 10), yticklabels=np.arange(1, 10))
+        axes[i].set_title(f'Confusion Matrix: {k}')
+        axes[i].set_xlabel('Predicted Band')
+        axes[i].set_ylabel('True Band')
+    
+    plt.tight_layout()
+    plt.savefig('confusion_matrices.png')
+    print("Confusion matrices saved to confusion_matrices.png")
+
 if __name__ == "__main__":
     # Replace with your actual best checkpoint path from the logs
     BEST_CHECKPOINT = "/mount/arbeitsdaten/studenten4/rasoulta/ARES/lightning_logs/version_8/checkpoints/epoch=8-step=873.ckpt" 
     run_evaluation(BEST_CHECKPOINT)
+    plot_confusion_matrices(targets, results)
