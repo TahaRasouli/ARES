@@ -1,4 +1,4 @@
-import lightning as L
+import pytorch_lightning as L
 
 class IELTSLoggingCallback(L.Callback):
     def on_validation_epoch_end(self, trainer, pl_module):

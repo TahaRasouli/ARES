@@ -4,6 +4,8 @@ pytorch-lightning>=2.0.0
 # Transformers & NLP
 transformers>=4.36.0
 tokenizers>=0.15.0
+sentencepiece
+protobuf
 
 # Data handling
 pandas>=1.5.0
@@ -12,3 +14,7 @@ numpy>=1.23.0
 # Utilities
 tqdm>=4.64.0
 scikit-learn>=1.2.0
+
+
+# Linguistic Features
+textstat
