@@ -22,24 +22,25 @@ class IELTSScorerModel(nn.Module):
         self.head_lr = nn.Linear(512 + self.num_extra, 8) # Extra features for Lexical
         self.head_ga = nn.Linear(512 + self.num_extra, 8) # Extra features for Grammar
 
+    # Inside your IELTSScorerModel forward pass
     def forward(self, input_ids, attention_mask, extra_features):
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
-        
-        # Suggestion 3: Multi-Layer Extraction (Last 4 layers)
-        # hidden_states is a tuple of 13 tensors (embedding + 12 layers)
         all_layers = outputs.hidden_states
-        cls_4 = torch.cat([all_layers[-i][:, 0, :] for i in range(1, 5)], dim=-1)
         
-        pooled = torch.tanh(self.pooler(cls_4))
-        pooled = self.dropout(pooled)
+        # TA/CC/LR use the last 4 layers (Semantic layers)
+        cls_semantic = torch.cat([all_layers[-i][:, 0, :] for i in range(1, 5)], dim=-1)
+        pooled_semantic = torch.tanh(self.pooler(cls_semantic))
         
-        # Suggestion 2: Injecting Handcrafted Features
-        # Combine pooled embeddings with error counts/readability for LR and GA
-        combined_features = torch.cat([pooled, extra_features], dim=1)
+        # GA uses "Syntax Layers" (e.g., layers 6, 7, 8, 9)
+        # This helps catch subject-verb agreement and tense issues
+        cls_syntax = torch.cat([all_layers[i][:, 0, :] for i in range(6, 10)], dim=-1)
+        pooled_syntax = torch.tanh(self.pooler(cls_syntax)) # Re-using pooler or defining a second one
+        
+        ga_input = torch.cat([pooled_syntax, extra_features], dim=1)
         
         return {
-            "TA": self.head_ta(pooled),
-            "CC": self.head_cc(pooled),
-            "LR": self.head_lr(combined_features),
-            "GA": self.head_ga(combined_features)
+            "TA": self.head_ta(pooled_semantic),
+            "CC": self.head_cc(pooled_semantic),
+            "LR": self.head_lr(torch.cat([pooled_semantic, extra_features], dim=1)),
+            "GA": self.head_ga(ga_input)
         }

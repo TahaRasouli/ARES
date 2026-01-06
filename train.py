@@ -1,5 +1,5 @@
 import pytorch_lightning as L
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, StochasticWeightAveraging
 from model import IELTSScorerModel
 from datamodule import IELTSDataModule
 from losses import OrdinalCORALLoss, logits_to_score
@@ -50,13 +50,17 @@ if __name__ == "__main__":
     
     checkpoint_callback = ModelCheckpoint(monitor="val_ga_mae", mode="min")
     
+
     trainer = L.Trainer(
-        max_epochs=10,
+        max_epochs=20, # Increased epochs for better GA convergence
         accelerator="gpu",
         devices=2,
         strategy="ddp",
         precision="16-mixed",
-        callbacks=[checkpoint_callback]
+        callbacks=[
+            checkpoint_callback,
+            StochasticWeightAveraging(swa_lrs=1e-2) # Smoothes out predictions
+        ]
     )
     
     trainer.fit(module, datamodule=dm)

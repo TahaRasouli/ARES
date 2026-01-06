@@ -1,29 +1,26 @@
 import torch
 import re
-from textstat import flesch_reading_ease
+from textstat import sentence_count, automated_readability_index
 
-def extract_linguistic_features(text):
-    """
-    Extracts 4 key features for GA and LR heads.
-    """
+def extract_ga_refined_features(text):
     words = text.split()
-    word_count = len(words)
+    word_count = max(1, len(words))
+    sents = sentence_count(text)
+    
+    # 1. Complexity Metric (Range): Ratio of long sentences
+    # IELTS Band 7+ requires 'complex structures'
     sentences = re.split(r'[.!?]+', text)
-    sent_count = max(1, len([s for s in sentences if len(s.strip()) > 0]))
+    long_sentences = sum(1 for s in sentences if len(s.split()) > 20)
+    complexity_ratio = long_sentences / max(1, sents)
     
-    # 1. Length feature (normalized)
-    len_feat = word_count / 500.0
+    # 2. Accuracy Proxy: Readability Index
+    # Lower readability often correlates with awkward grammar/syntax
+    ari = automated_readability_index(text) / 20.0 
     
-    # 2. Sentence Complexity (normalized)
-    complexity = (word_count / sent_count) / 40.0
+    # 3. Density: average words per sentence
+    avg_sent_len = (word_count / max(1, sents)) / 40.0
     
-    # 3. Readability (Flesch Ease)
-    readability = flesch_reading_ease(text) / 100.0
-    
-    # 4. Lexical Variety (Type-Token Ratio)
-    ttr = len(set(words)) / (word_count + 1)
-    
-    return torch.tensor([len_feat, complexity, readability, ttr], dtype=torch.float)
+    return torch.tensor([complexity_ratio, ari, avg_sent_len, 1.0], dtype=torch.float)
 
 def get_ordinal_labels(target, num_classes=9):
     """

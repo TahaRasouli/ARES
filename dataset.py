@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+from utils import extract_ga_refined_features # Import your new function
 import json
 import re
 
@@ -27,6 +28,7 @@ class IELTSDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+
     def __getitem__(self, idx):
         item = self.data[idx]
         text = f"PROMPT: {item['prompt']}\n\nESSAY: {item['essay']}"
@@ -39,7 +41,20 @@ class IELTSDataset(Dataset):
             return_tensors='pt'
         )
         
-        extra = self._extract_features(item['essay'])
+        # Use the refined GA features here
+        extra = extract_ga_refined_features(item['essay'])
+        
+        return {
+            "input_ids": encoding['input_ids'].flatten(),
+            "attention_mask": encoding['attention_mask'].flatten(),
+            "extra_features": extra, # This now contains complexity/readability/sent_len
+            "labels": {
+                "TA": torch.tensor(item['TA'], dtype=torch.long),
+                "CC": torch.tensor(item['CC'], dtype=torch.long),
+                "LR": torch.tensor(item['LR'], dtype=torch.long),
+                "GA": torch.tensor(item['GA'], dtype=torch.long),
+            }
+        }
         
         return {
             "input_ids": encoding['input_ids'].flatten(),
