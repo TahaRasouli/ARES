@@ -88,6 +88,8 @@ def run_evaluation(checkpoint_path):
     avg_qwk = df["QWK (Alignment)"].mean()
     print(f"Mean Quadratic Weighted Kappa: {avg_qwk:.4f}")
 
+    return targets, results
+
 def plot_confusion_matrices(targets, results):
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
     axes = axes.flatten()
@@ -105,7 +107,10 @@ def plot_confusion_matrices(targets, results):
     print("Confusion matrices saved to confusion_matrices.png")
 
 if __name__ == "__main__":
-    # Replace with your actual best checkpoint path from the logs
     BEST_CHECKPOINT = "/mount/arbeitsdaten/studenten4/rasoulta/ARES/lightning_logs/version_8/checkpoints/epoch=8-step=873.ckpt" 
-    run_evaluation(BEST_CHECKPOINT)
-    plot_confusion_matrices(targets, results)
+    
+    # 1. Capture the returned dictionaries
+    val_targets, val_results = run_evaluation(BEST_CHECKPOINT)
+    
+    # 2. Pass them to the plotting function
+    plot_confusion_matrices(val_targets, val_results)
