@@ -1,5 +1,5 @@
 import pytorch_lightning as L
-from lightning.pytorch.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint
 from model import IELTSScorerModel
 from datamodule import IELTSDataModule
 from losses import OrdinalCORALLoss, logits_to_score
