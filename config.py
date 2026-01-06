@@ -6,7 +6,7 @@ class Config:
     MAX_LENGTH = 768
     
     # Data Paths
-    TRAIN_JSON = "data/preference_data_clean.json"
+    TRAIN_JSON = "Dataset/preference_data_clean.json"
     OUTPUT_DIR = "checkpoints/"
     
     # Training Hyperparameters
