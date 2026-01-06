@@ -9,9 +9,12 @@ from datamodule import IELTSDataModule
 from config import Config
 
 def run_evaluation(checkpoint_path):
-    # 1. Setup Model and Data
-    # Note: Use your environment's Lightning module name (L.LightningModule or pl.LightningModule)
+    # 1. Setup Device and Model
+    # Detect the device (e.g., cuda:0)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     lit_model = IELTSLitModule.load_from_checkpoint(checkpoint_path)
+    lit_model.to(device)  # Move the model to the GPU
     lit_model.eval()
     lit_model.freeze()
     
@@ -22,24 +25,26 @@ def run_evaluation(checkpoint_path):
     results = {"TA": [], "CC": [], "LR": [], "GA": []}
     targets = {"TA": [], "CC": [], "LR": [], "GA": []}
 
-    print(f"Evaluating checkpoint: {checkpoint_path}")
+    print(f"Evaluating on {device}...")
     
     # 2. Collect Predictions
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validating"):
-            input_ids = batch['input_ids']
-            mask = batch['attention_mask']
-            extra = batch['extra_features']
+            # MOVE DATA TO DEVICE HERE
+            input_ids = batch['input_ids'].to(device)
+            mask = batch['attention_mask'].to(device)
+            extra = batch['extra_features'].to(device)
             
+            # Forward pass
             logits_dict = lit_model.model(input_ids, mask, extra)
             
             for k in Config.CRITERIA:
-                # Convert ordinal logits to integer scores [1-9]
                 probas = torch.sigmoid(logits_dict[k])
                 preds = (probas > 0.5).sum(dim=1) + 1
                 
+                # Move back to CPU for numpy/metrics processing
                 results[k].extend(preds.cpu().numpy())
-                targets[k].extend(batch['labels'][k].cpu().numpy())
+                targets[k].extend(batch['labels'][k].numpy()) # Labels are already on CPU
 
     # 3. Calculate and Print Metrics
     summary = []
